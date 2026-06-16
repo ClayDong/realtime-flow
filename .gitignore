@@ -1,0 +1,64 @@
+# ─── Python ─────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ─── 虚拟环境 ───────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ─── 敏感信息（绝不提交） ───────────────────────────
+.env
+.env.local
+.env.production
+*.pem
+*.key
+credentials.json
+
+# ─── 本地数据库（含历史数据，不提交） ───────────────
+db/*.db
+db/*.db-journal
+db/*.db-wal
+db/*.db-shm
+
+# ─── 运行时文件 ─────────────────────────────────────
+*.log
+*.pid
+/tmp/
+.cache/
+
+# ─── IDE / 编辑器 ───────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ─── macOS ──────────────────────────────────────────
+.AppleDouble
+.LSOverride
+Icon?
+
+# ─── Cloudflare Tunnel 凭证（本地配置，不提交） ────
+# 注意：start-tunnel.sh 中的域名/密码已改为从 .env 读取
+# cloudflared-config.yml 是模板，可以提交
+
+# ─── 测试 / 覆盖率 ──────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── 个人配置备份 ───────────────────────────────────
+*.backup
+*.bak
+hosts.backup.*

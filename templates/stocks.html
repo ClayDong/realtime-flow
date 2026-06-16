@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>个股资金流 - realtime-flow</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-brand">📊 资金流监测</div>
+    <div class="navbar-links">
+      <a href="/">综合看板</a>
+      <a href="/sectors">行业资金</a>
+      <a href="/stocks" class="active">个股资金</a>
+    </div>
+    <div class="navbar-status">
+      <span id="status-text">连接中...</span>
+      <span class="status-dot online" id="status-dot"></span>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h1 class="page-title">📈 个股资金流详情</h1>
+        <p class="page-subtitle">全市场个股资金流向排行 · 主力净占比 · 资金强度分级</p>
+      </div>
+      <div class="timestamp">🕐 更新: <span id="update-time">-</span></div>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div id="stock-filters" style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;">
+      <div class="card" style="padding:12px;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:13px;color:var(--text-secondary);">筛选强度:</span>
+        <select id="strength-filter" style="background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:13px;">
+          <option value="all">全部</option>
+          <option value="strong_in">仅强流入</option>
+          <option value="inflow">流入</option>
+          <option value="outflow">流出</option>
+          <option value="strong_out">仅强流出</option>
+        </select>
+      </div>
+      <div class="card" style="padding:12px;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:13px;color:var(--text-secondary);">排序方式:</span>
+        <select id="sort-type" style="background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:13px;">
+          <option value="score">综合评分</option>
+          <option value="main_inflow">主力净流入</option>
+          <option value="main_ratio">主力净占比</option>
+          <option value="price_change">涨跌幅</option>
+        </select>
+      </div>
+      <div class="card" style="padding:12px;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:13px;color:var(--text-secondary);">搜索:</span>
+        <input id="stock-search" type="text" placeholder="代码/名称" style="background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:13px;width:140px;">
+      </div>
+    </div>
+
+    <!-- 统计汇总 -->
+    <div id="stock-stat-summary"></div>
+
+    <!-- 个股全表 -->
+    <div id="stock-full-table">
+      <div class="loading">加载个股数据...</div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const check = setInterval(() => {
+        if (!window.app) return;
+        clearInterval(check);
+
+        const app = window.app;
+
+        // 扩展渲染
+        app.renderAll = (function(orig) {
+          return function() {
+            orig.call(this);
+            this.renderStockFull();
+            this.renderStockSummary();
+          };
+        })(app.renderAll.bind(app));
+
+        app.stockFilteredData = [];
+        app.stockPage = 1;
+        app.stockPageSize = 20;
+
+        app.renderStockSummary = function() {
+          const el = document.getElementById('stock-stat-summary');
+          if (!el) return;
+          const analysis = this.data?.stock_analysis;
+          if (!analysis?.ranked_stocks) { el.innerHTML = ''; return; }
+
+          const all = analysis.ranked_stocks;
+          const strongIn = all.filter(s => s.main_ratio > 5).length;
+          const mildIn = all.filter(s => s.main_ratio > 2 && s.main_ratio <= 5).length;
+          const neutral = all.filter(s => s.main_ratio >= -2 && s.main_ratio <= 2).length;
+          const mildOut = all.filter(s => s.main_ratio < -2 && s.main_ratio >= -5).length;
+          const strongOut = all.filter(s => s.main_ratio < -5).length;
+
+          el.innerHTML = `
+            <div class="grid-5" style="grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px;">
+              <div class="card" style="padding:12px;text-align:center;">
+                <div style="font-size:11px;color:var(--text-muted);">总监测</div>
+                <div style="font-size:20px;font-weight:700;">${all.length}</div>
+              </div>
+              <div class="card" style="padding:12px;text-align:center;border-color:rgba(0,200,83,0.3);">
+                <div style="font-size:11px;color:var(--accent-green);">强流入 >5%</div>
+                <div style="font-size:20px;font-weight:700;color:var(--accent-green);">${strongIn}</div>
+              </div>
+              <div class="card" style="padding:12px;text-align:center;border-color:rgba(64,196,255,0.3);">
+                <div style="font-size:11px;color:var(--accent-blue);">温和流入</div>
+                <div style="font-size:20px;font-weight:700;color:var(--accent-blue);">${mildIn}</div>
+              </div>
+              <div class="card" style="padding:12px;text-align:center;border-color:rgba(255,171,0,0.3);">
+                <div style="font-size:11px;color:#ffab00;">温和流出</div>
+                <div style="font-size:20px;font-weight:700;color:#ffab00;">${mildOut}</div>
+              </div>
+              <div class="card" style="padding:12px;text-align:center;border-color:rgba(255,23,68,0.3);">
+                <div style="font-size:11px;color:var(--accent-red);">强流出 <-5%</div>
+                <div style="font-size:20px;font-weight:700;color:var(--accent-red);">${strongOut}</div>
+              </div>
+            </div>
+          `;
+        };
+
+        app.renderStockFull = function() {
+          const container = document.getElementById('stock-full-table');
+          if (!container) return;
+
+          const analysis = this.data?.stock_analysis;
+          if (!analysis?.ranked_stocks) {
+            container.innerHTML = `<div class="empty-state"><div class="icon">📈</div><p>个股数据加载中...</p></div>`;
+            return;
+          }
+
+          let stocks = [...analysis.ranked_stocks];
+
+          // 筛选
+          const strengthFilter = document.getElementById('strength-filter')?.value || 'all';
+          const searchText = (document.getElementById('stock-search')?.value || '').toLowerCase();
+          const sortBy = document.getElementById('sort-type')?.value || 'score';
+
+          if (strengthFilter === 'strong_in') stocks = stocks.filter(s => s.main_ratio > 5);
+          else if (strengthFilter === 'inflow') stocks = stocks.filter(s => s.main_inflow > 0);
+          else if (strengthFilter === 'outflow') stocks = stocks.filter(s => s.main_inflow < 0);
+          else if (strengthFilter === 'strong_out') stocks = stocks.filter(s => s.main_ratio < -5);
+
+          if (searchText) {
+            stocks = stocks.filter(s =>
+              s.code.toLowerCase().includes(searchText) ||
+              s.name.toLowerCase().includes(searchText)
+            );
+          }
+
+          // 排序
+          const sortMap = {
+            score: 'score',
+            main_inflow: 'main_inflow',
+            main_ratio: 'main_ratio',
+            price_change: 'price_change',
+          };
+          const sortKey = sortMap[sortBy] || 'score';
+          stocks.sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
+
+          this.stockFilteredData = stocks;
+
+          // 分页
+          const totalPages = Math.ceil(stocks.length / this.stockPageSize) || 1;
+          if (this.stockPage > totalPages) this.stockPage = 1;
+          const start = (this.stockPage - 1) * this.stockPageSize;
+          const pageStocks = stocks.slice(start, start + this.stockPageSize);
+
+          const pageNumHtml = Array.from({length: Math.min(totalPages, 10)}, (_, i) => {
+            const p = i + 1;
+            const cls = p === this.stockPage ? 'background:var(--accent-blue);color:#fff;' : 'background:var(--bg-card-hover);color:var(--text-secondary);';
+            return `<button class="page-btn" data-page="${p}" style="${cls}border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;">${p}</button>`;
+          }).join('');
+
+          container.innerHTML = `
+            <div class="card">
+              <div class="card-title" style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
+                <span>个股资金流（${stocks.length} 只，第 ${this.stockPage}/${totalPages} 页）<span title="已过滤涨跌停股票，避免虚假信号" style="font-size:11px;color:var(--text-muted);font-weight:normal;margin-left:8px;cursor:help;">ⓘ 已过滤涨跌停</span></span>
+                <span style="font-size:11px;color:var(--text-muted);font-weight:normal;">数据每 2 分钟刷新</span>
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead><tr>
+                    <th>#</th><th>代码</th><th>名称</th><th>价格</th><th title="当日涨跌幅">涨跌幅</th>
+                    <th title="主力净额=超大单+大单净额">主力净流入</th><th title="主力净额/成交额">主力占比</th><th title="单笔≥500万的净流入">超大单</th><th title="单笔100-500万的净流入">大单</th>
+                    <th title="综合评分=0.45×主力占比+0.25×主力净额+0.20×超大单+0.10×大单">综合评分</th><th>强度</th>
+                  </tr></thead>
+                  <tbody>
+                    ${pageStocks.map((s, i) => `
+                      <tr>
+                        <td>${utils.rankBadge(start + i + 1)}</td>
+                        <td style="color:var(--text-muted);">${s.code}</td>
+                        <td><strong>${s.name}</strong></td>
+                        <td>${utils.formatPrice(s.price)}</td>
+                        <td class="${utils.colorClass(s.price_change)}">${utils.formatPct(s.price_change)}</td>
+                        <td class="${utils.colorClass(s.main_inflow)}">${utils.formatMoney(s.main_inflow)}</td>
+                        <td class="${utils.colorClass(s.main_ratio)}">${utils.formatPct(s.main_ratio)}${utils.ratioBar(s.main_ratio)}</td>
+                        <td class="${utils.colorClass(s.super_large_inflow)}">${utils.formatMoney(s.super_large_inflow)}</td>
+                        <td class="${utils.colorClass(s.large_inflow)}">${utils.formatMoney(s.large_inflow)}</td>
+                        <td style="font-weight:700;color:var(--accent-blue);">${s.score}</td>
+                        <td>${utils.strengthTag(s.main_ratio)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ${totalPages > 1 ? `
+                <div style="display:flex;gap:6px;justify-content:center;padding:12px 0;flex-wrap:wrap;">
+                  <button class="page-btn" data-page="${this.stockPage - 1}" ${this.stockPage <= 1 ? 'disabled' : ''} style="background:var(--bg-card-hover);color:var(--text-secondary);border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;">上一页</button>
+                  ${pageNumHtml}
+                  <button class="page-btn" data-page="${this.stockPage + 1}" ${this.stockPage >= totalPages ? 'disabled' : ''} style="background:var(--bg-card-hover);color:var(--text-secondary);border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;">下一页</button>
+                </div>
+              ` : ''}
+            </div>
+          `;
+
+          // 绑定分页按钮
+          container.querySelectorAll('.page-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const p = parseInt(btn.dataset.page);
+              if (p >= 1 && p <= totalPages) {
+                this.stockPage = p;
+                this.renderStockFull();
+              }
+            });
+          });
+        };
+
+        // 绑定筛选事件
+        ['strength-filter', 'sort-type', 'stock-search'].forEach(id => {
+          document.getElementById(id)?.addEventListener('change', () => app.renderStockFull());
+          document.getElementById(id)?.addEventListener('input', () => app.renderStockFull());
+        });
+
+        // 初始渲染
+        if (app.data) app.renderAll();
+      }, 100);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>行业资金流 - realtime-flow</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏭</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-brand">📊 资金流监测</div>
+    <div class="navbar-links">
+      <a href="/">综合看板</a>
+      <a href="/sectors" class="active">行业资金</a>
+      <a href="/stocks">个股资金</a>
+    </div>
+    <div class="navbar-status">
+      <span id="status-text">连接中...</span>
+      <span class="status-dot online" id="status-dot"></span>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h1 class="page-title">🏭 行业资金流详情</h1>
+        <p class="page-subtitle">全部行业资金流向排行 · 可点击查看历史趋势</p>
+      </div>
+      <div class="timestamp">🕐 更新: <span id="update-time">-</span></div>
+    </div>
+
+    <div id="sector-full-table">
+      <div class="loading">加载行业数据...</div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // 等待 app 初始化后覆写渲染逻辑
+      const origRender = window.app?.renderSectorAnalysis;
+
+      // 扩展 app 以支持行业全表
+      const check = setInterval(() => {
+        if (!window.app) return;
+        clearInterval(check);
+
+        const app = window.app;
+        const orig = app.renderAll.bind(app);
+
+        app.renderAll = function() {
+          orig();
+          this.renderSectorFullTable();
+        };
+
+        app.renderSectorFullTable = function() {
+          const container = document.getElementById('sector-full-table');
+          if (!container) return;
+          const sectors = this.data?.sectors?.sector_today;
+          if (!sectors?.length) {
+            container.innerHTML = `<div class="empty-state"><div class="icon">🏭</div><p>行业数据加载中...</p></div>`;
+            return;
+          }
+
+          // 今日 + 5日 对比
+          const sectors5d = this.data?.sectors?.sector_5d || [];
+
+          let html = `
+            <div class="card">
+              <div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;">
+                <div class="card-title">全行业资金流排行（${sectors.length} 个行业）</div>
+                <span style="font-size:12px;color:var(--text-muted);">点击表头排序</span>
+              </div>
+              <div class="table-wrapper">
+                <table id="sector-table-body">
+                  <thead><tr>
+                    <th data-sort="rank">#</th>
+                    <th data-sort="name">行业</th>
+                    <th data-sort="price">最新价</th>
+                    <th data-sort="change">涨跌幅</th>
+                    <th data-sort="main_inflow">主力净流入</th>
+                    <th data-sort="main_ratio">主力净占比</th>
+                    <th data-sort="super_inflow">超大单净流入</th>
+                    <th data-sort="large_inflow">大单净流入</th>
+                    <th data-sort="medium_inflow">中单净流入</th>
+                    <th data-sort="small_inflow">小单净流入</th>
+                    <th>强度</th>
+                  </tr></thead>
+                  <tbody>
+                    ${sectors.map((s, i) => {
+                      const mainIn = utils.getVal(s, '主力净流入-净额', 'f62', 0);
+                      const mainRatio = utils.getVal(s, '主力净流入-净占比', 'f184', 0);
+                      const superIn = utils.getVal(s, '超大单净流入-净额', 'f66', 0);
+                      const largeIn = utils.getVal(s, '大单净流入-净额', 'f69', 0);
+                      const mediumIn = utils.getVal(s, '中单净流入-净额', 'f72', 0);
+                      const smallIn = utils.getVal(s, '小单净流入-净额', 'f78', 0);
+                      const pct = utils.getVal(s, '涨跌幅', 'f3', 0);
+                      const price = utils.getVal(s, '最新价', 'f2', 0);
+                      const name = s.行业名称 || s.板块名称 || s.f14 || '未知';
+                      return `<tr>
+                        <td>${utils.rankBadge(i + 1)}</td>
+                        <td><strong>${name}</strong></td>
+                        <td>${utils.formatPrice(price)}</td>
+                        <td class="${utils.colorClass(pct)}">${utils.formatPct(pct)}</td>
+                        <td class="${utils.colorClass(mainIn)}">${utils.formatMoney(mainIn)}</td>
+                        <td class="${utils.colorClass(mainRatio)}">${utils.formatPct(mainRatio)}${utils.ratioBar(mainRatio)}</td>
+                        <td class="${utils.colorClass(superIn)}">${utils.formatMoney(superIn)}</td>
+                        <td class="${utils.colorClass(largeIn)}">${utils.formatMoney(largeIn)}</td>
+                        <td class="${utils.colorClass(mediumIn)}">${utils.formatMoney(mediumIn)}</td>
+                        <td class="${utils.colorClass(smallIn)}">${utils.formatMoney(smallIn)}</td>
+                        <td>${utils.strengthTag(mainRatio)}</td>
+                      </tr>`;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+
+          // 5日排行
+          if (sectors5d.length) {
+            html += `
+              <div class="card" style="margin-top:16px;">
+                <div class="card-title" style="margin-bottom:12px;">📅 行业 5日资金流排行</div>
+                <div class="table-wrapper">
+                  <table>
+                    <thead><tr>
+                      <th>#</th><th>行业</th><th>5日涨跌幅</th><th>5日主力净流入</th><th>5日主力占比</th>
+                    </tr></thead>
+                    <tbody>
+                      ${sectors5d.slice(0, 30).map((s, i) => {
+                        const mainIn = utils.getVal(s, '主力净流入-净额', 'f109', 0);
+                        const mainRatio = utils.getVal(s, '主力净流入-净占比', 'f164', 0);
+                        const pct = utils.getVal(s, '涨跌幅', 'f3', 0);
+                        const name = s.行业名称 || s.板块名称 || s.f14 || '未知';
+                        return `<tr>
+                          <td>${utils.rankBadge(i + 1)}</td>
+                          <td><strong>${name}</strong></td>
+                          <td class="${utils.colorClass(pct)}">${utils.formatPct(pct)}</td>
+                          <td class="${utils.colorClass(mainIn)}">${utils.formatMoney(mainIn)}</td>
+                          <td class="${utils.colorClass(mainRatio)}">${utils.formatPct(mainRatio)}${utils.ratioBar(mainRatio)}</td>
+                        </tr>`;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            `;
+          }
+
+          container.innerHTML = html;
+        };
+
+        // 触发一次渲染
+        if (app.data) app.renderAll();
+      }, 100);
+    });
+  </script>
+</body>
+</html>

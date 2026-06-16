@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>资金流监测 - realtime-flow</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-brand">📊 资金流监测</div>
+    <div class="navbar-links">
+      <a href="/" class="active">综合看板</a>
+      <a href="/sectors">行业资金</a>
+      <a href="/stocks">个股资金</a>
+    </div>
+    <div class="navbar-status">
+      <span id="status-text">连接中...</span>
+      <span class="status-dot online" id="status-dot"></span>
+      <button onclick="logout()" style="margin-left:12px;background:rgba(255,23,68,0.15);color:var(--accent-red);border:1px solid rgba(255,23,68,0.3);padding:3px 10px;border-radius:4px;cursor:pointer;font-size:12px;">登出</button>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h1 class="page-title">综合资金流看板</h1>
+        <p class="page-subtitle">实时监测市场资金流动 · 行业轮动 · 个股异动 · 自选股追踪</p>
+      </div>
+      <div class="timestamp">🕐 更新: <span id="update-time">-</span></div>
+    </div>
+
+    <!-- 市场概览 -->
+    <div id="market-overview"><div class="loading">加载市场数据</div></div>
+
+    <!-- 行业分析 -->
+    <h2 style="font-size:18px;font-weight:600;margin:24px 0 12px;color:var(--accent-blue);">🏭 行业资金流</h2>
+
+    <!-- 行业趋势图 + 自选股 两列布局 -->
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px;">📊 流入 TOP 行业资金流</div>
+        <div style="height:250px;">
+          <canvas id="sector-trend-chart"></canvas>
+        </div>
+      </div>
+      <div class="card" id="watchlist-panel">
+        <div class="loading">加载自选股...</div>
+      </div>
+    </div>
+
+    <div id="sector-analysis"><div class="loading">加载行业数据</div></div>
+
+    <!-- 个股分析 -->
+    <h2 style="font-size:18px;font-weight:600;margin:24px 0 12px;color:var(--accent-green);">📈 个股资金流</h2>
+    <div id="stock-analysis"><div class="loading">加载个股数据</div></div>
+
+    <!-- 概念 + 信号 -->
+    <div class="grid-2" style="margin-top:24px;">
+      <div id="concept-analysis"><div class="loading">加载概念数据</div></div>
+      <div>
+        <div class="card" style="height:100%;">
+          <div class="card-title gold" style="margin-bottom:12px;">🔔 实时信号 & 预警</div>
+          <div id="signals-panel"><div class="loading">加载信号</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:32px;padding:16px;border-top:1px solid var(--border);text-align:center;color:var(--text-muted);font-size:12px;">
+      <p>数据来源：东方财富 · 资金流基于公开行情数据计算，仅供参考，不构成投资建议</p>
+      <p style="margin-top:4px;">⚠️ 投资有风险，入市需谨慎</p>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+  <script>
+    // 登出
+    async function logout() {
+      if (!confirm('确认登出？')) return;
+      await fetch('/api/auth/logout', {method: 'POST'});
+      window.location.href = '/login';
+    }
+  </script>
+</body>
+</html>
