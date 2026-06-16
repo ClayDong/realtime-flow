@@ -257,12 +257,54 @@ class Database:
                     FROM sector_flow_snapshot
                     WHERE tag = ?
                     GROUP BY sector_name
-                ) latest ON s.sector_name = latest.sector_name 
+                ) latest ON s.sector_name = latest.sector_name
                     AND s.snapshot_time = latest.max_time
                 WHERE s.tag = ?
                 ORDER BY s.rank_idx ASC
             """, (tag, tag)).fetchall()
             return [dict(r) for r in rows]
+
+    def get_sector_history(self, sector_name: str, days: int = 30) -> List[Dict]:
+        """获取某行业的历史资金流时间序列（本地 DB）"""
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT snapshot_time, sector_name, tag, rank_idx, current_price,
+                       price_change, main_net_inflow, main_net_ratio,
+                       super_large_inflow, large_inflow, medium_inflow, small_inflow
+                FROM sector_flow_snapshot
+                WHERE sector_name = ? AND snapshot_time >= ?
+                ORDER BY snapshot_time ASC
+            """, (sector_name, cutoff)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_sector_daily_history(self, sector_name: str, days: int = 30) -> List[Dict]:
+        """获取某行业的日级聚合历史（按天取最后一条快照）"""
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT date(snapshot_time) as date, sector_name,
+                       MAX(snapshot_time) as last_time,
+                       AVG(main_net_inflow) as avg_main_inflow,
+                       main_net_inflow as last_main_inflow,
+                       main_net_ratio as last_main_ratio,
+                       price_change as last_price_change
+                FROM sector_flow_snapshot
+                WHERE sector_name = ? AND snapshot_time >= ? AND tag = '今日'
+                GROUP BY date(snapshot_time), sector_name
+                ORDER BY date ASC
+            """, (sector_name, cutoff)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_sector_list(self) -> List[str]:
+        """获取所有采集过的行业名（用于历史查询下拉框）"""
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT sector_name FROM sector_flow_snapshot
+                WHERE tag = '今日'
+                ORDER BY sector_name
+            """).fetchall()
+            return [r["sector_name"] for r in rows]
 
     # ─── 个股快照 ─────────────────────────────────────
 
@@ -303,12 +345,76 @@ class Database:
                     FROM stock_flow_snapshot
                     WHERE tag = ?
                     GROUP BY stock_code
-                ) latest ON s.stock_code = latest.stock_code 
+                ) latest ON s.stock_code = latest.stock_code
                     AND s.snapshot_time = latest.max_time
                 WHERE s.tag = ?
                 ORDER BY s.rank_idx ASC
                 LIMIT ?
             """, (tag, tag, top_n)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_stock_history(self, stock_code: str, days: int = 30) -> List[Dict]:
+        """获取某只个股的历史资金流时间序列（本地 DB）"""
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT snapshot_time, stock_code, stock_name, tag, rank_idx,
+                       current_price, price_change, main_net_inflow, main_net_ratio,
+                       super_large_inflow, large_inflow, medium_inflow, small_inflow
+                FROM stock_flow_snapshot
+                WHERE stock_code = ? AND snapshot_time >= ?
+                ORDER BY snapshot_time ASC
+            """, (stock_code, cutoff)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_stock_daily_history(self, stock_code: str, days: int = 30) -> List[Dict]:
+        """获取某只个股的日级聚合历史"""
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d 00:00:00")
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT date(snapshot_time) as date, stock_code, stock_name,
+                       MAX(snapshot_time) as last_time,
+                       AVG(main_net_inflow) as avg_main_inflow,
+                       main_net_inflow as last_main_inflow,
+                       main_net_ratio as last_main_ratio,
+                       price_change as last_price_change,
+                       current_price as last_price
+                FROM stock_flow_snapshot
+                WHERE stock_code = ? AND snapshot_time >= ? AND tag = '今日'
+                GROUP BY date(snapshot_time), stock_code
+                ORDER BY date ASC
+            """, (stock_code, cutoff)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_stock_list(self, top_n: int = 200) -> List[Dict]:
+        """获取最近采集过的个股列表（用于历史查询下拉框）"""
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT s.stock_code, s.stock_name
+                FROM stock_flow_snapshot s
+                INNER JOIN (
+                    SELECT stock_code, MAX(snapshot_time) as max_time
+                    FROM stock_flow_snapshot WHERE tag = '今日'
+                    GROUP BY stock_code
+                ) latest ON s.stock_code = latest.stock_code
+                    AND s.snapshot_time = latest.max_time
+                WHERE s.tag = '今日'
+                ORDER BY s.rank_idx ASC
+                LIMIT ?
+            """, (top_n,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_market_flow_history(self, days: int = 30) -> List[Dict]:
+        """获取大盘资金流历史（按日）"""
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT date, sh_close, sh_change, sz_close, sz_change,
+                       main_net_inflow, main_net_ratio,
+                       super_large_inflow, large_inflow, medium_inflow, small_inflow,
+                       north_bound_total
+                FROM market_flow
+                ORDER BY date DESC LIMIT ?
+            """, (days,)).fetchall()
             return [dict(r) for r in rows]
 
     # ─── 概念快照 ─────────────────────────────────────

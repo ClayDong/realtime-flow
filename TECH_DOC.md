@@ -1,8 +1,8 @@
 # Realtime-Flow 资金流监测系统 · 技术文档
 
-> 版本：v2.0.0 · 最后更新：2026-06-17
-> 代码行数：约 4,100 行（Python 2,300 行 + JavaScript 700 行 + HTML/CSS 1,000 行 + Shell 85 行）
-> 技术栈：Python 3.9+ / FastAPI / SQLite / WebSocket / Chart.js / AKShare / chinese_calendar
+> 版本：v2.1.0 · 最后更新：2026-06-17
+> 代码行数：约 4,500 行（Python 2,400 行 + JavaScript 800 行 + HTML/CSS 1,100 行 + Shell 300 行）
+> 技术栈：Python 3.9+ / FastAPI / SQLite / WebSocket / Chart.js / AKShare / chinese_calendar / Cloudflare Tunnel
 
 ---
 
@@ -689,11 +689,51 @@ VACUUM;
 }
 ```
 
+#### 历史数据查询 API（v2.1 新增）
+
+v2.1 新增基于本地落盘数据库的时间序列查询能力，优先查本地 DB，无数据时降级到 akshare 实时拉取。
+
+| API | 说明 | 参数 |
+|-----|------|------|
+| `GET /api/history/sectors/list` | 可查询的行业名列表 | 无 |
+| `GET /api/history/stocks/list` | 可查询的个股列表 | 无 |
+| `GET /api/history/local/sector` | 行业分钟级时间序列 | `sector_name`, `days=30` |
+| `GET /api/history/local/sector/daily` | 行业日级聚合 | `sector_name`, `days=30` |
+| `GET /api/history/local/stock` | 个股分钟级时间序列 | `code`, `days=30` |
+| `GET /api/history/local/stock/daily` | 个股日级聚合 | `code`, `days=30` |
+| `GET /api/history/local/market` | 大盘资金流历史（按日） | `days=30` |
+| `GET /api/history/sectors` | 行业历史（优先本地 DB，降级 akshare） | `sector_name` |
+| `GET /api/history/stock` | 个股历史（优先本地 DB，降级 akshare） | `code`, `market` |
+
+**响应示例**（`/api/history/local/sector/daily`）：
+```json
+{
+  "sector": "环保工程",
+  "days": 30,
+  "count": 5,
+  "data": [
+    {
+      "date": "2026-06-13",
+      "sector_name": "环保工程",
+      "last_time": "2026-06-13T14:58:00",
+      "avg_main_inflow": 1.85,
+      "last_main_inflow": 2.5,
+      "last_main_ratio": 3.47,
+      "last_price_change": 1.21
+    }
+  ]
+}
+```
+
+**数据来源标识**：`/api/history/sectors` 和 `/api/history/stock` 返回 `source` 字段：
+- `local_db`：来自本地落盘数据（推荐，速度快）
+- `akshare`：实时拉取（本地无数据时降级）
+
 #### GET /api/stats
 系统运行统计。
 
 #### GET /health
-健康检查。
+健康检查（launchd 保活脚本会调用此端点验证服务可用性）。
 
 ### 6.2 WebSocket API
 
@@ -755,9 +795,16 @@ chinese_calendar>=1.9.0
 | 方式 | 命令 | 特点 |
 |------|------|------|
 | 前台调试 | `python3 main.py` | 实时看日志，Ctrl+C 停止 |
-| Screen 守护 | `bash start.sh start` | 后台运行，SSH 断开不停止 |
-| Launchd 开机自启 | `bash start.sh launchd-install` | 重启后自动启动 |
-| 手动后台 | `python3 main.py & disown` | 简单但可能被系统回收 |
+| 脚本启动 | `bash start.sh start` | 后台运行 + 健康检查（5次重试） |
+| Launchd 开机自启 | `bash start.sh launchd-install` | 重启后自动启动 + 崩溃自动重启 |
+| 带 Tunnel 启动 | `bash start-tunnel.sh start` | FastAPI + Cloudflare Tunnel 一起启动 |
+| Tunnel 开机自启 | `bash start-tunnel.sh launchd-install` | 服务 + Tunnel 都开机自启 + 崩溃重启 |
+
+**v2.1 健壮性增强**：
+- 自动探测 python3 路径（venv → 系统 → 常见路径），不再硬编码
+- 启动时 5 次 `/health` 健康检查重试
+- launchd 配置含 `KeepAlive`（崩溃自动重启）+ `ThrottleInterval=10`（熔断间隔）
+- 日志写到 `~/Library/Logs/realtime-flow/`（macOS 重启不丢失）
 
 ---
 
@@ -814,30 +861,49 @@ export WEB_PORT=9999
 
 ### 9.1 管理命令
 
+**主服务（start.sh）**：
 ```bash
-bash start.sh status          # 查看运行状态
+bash start.sh status          # 查看运行状态（含健康检查）
 bash start.sh logs            # 实时查看日志
 bash start.sh stop            # 停止服务
-bash start.sh start           # 启动服务
+bash start.sh start           # 启动服务（含健康检查）
 bash start.sh restart         # 重启服务
-bash start.sh launchd-install # 安装开机自启
+bash start.sh launchd-install # 安装开机自启 + 崩溃自动重启
 bash start.sh launchd-remove  # 移除开机自启
+```
+
+**带 Tunnel（start-tunnel.sh，外网访问）**：
+```bash
+bash start-tunnel.sh setup             # 首次安装配置（登录Cloudflare、创建Tunnel）
+bash start-tunnel.sh start             # 启动服务 + Tunnel
+bash start-tunnel.sh stop              # 停止所有服务
+bash start-tunnel.sh restart           # 重启服务
+bash start-tunnel.sh status            # 查看运行状态
+bash start-tunnel.sh logs              # 实时查看日志
+bash start-tunnel.sh launchd-install   # 开机自启 + 崩溃自动重启（推荐生产环境）
+bash start-tunnel.sh launchd-remove    # 卸载开机自启
 ```
 
 ### 9.2 日志查看
 
+v2.1 起日志写到 `~/Library/Logs/realtime-flow/`（macOS 重启不丢失）：
+
 ```bash
+# 日志路径
+# ~/Library/Logs/realtime-flow/realtime-flow.log  - FastAPI 服务日志
+# ~/Library/Logs/realtime-flow/cloudflared.log    - Tunnel 日志
+
 # 实时日志
-tail -f /tmp/realtime-flow.log
+tail -f ~/Library/Logs/realtime-flow/realtime-flow.log
 
 # 搜索错误
-grep -i "error\|exception\|failed" /tmp/realtime-flow.log
+grep -i "error\|exception\|failed" ~/Library/Logs/realtime-flow/realtime-flow.log
 
 # 查看数据源降级
-grep -E "降级|主源|sina|tencent" /tmp/realtime-flow.log
+grep -E "降级|主源|sina|tencent" ~/Library/Logs/realtime-flow/realtime-flow.log
 
 # 查看自选股采集
-grep "自选股采集" /tmp/realtime-flow.log
+grep "自选股采集" ~/Library/Logs/realtime-flow/realtime-flow.log
 ```
 
 ### 9.3 数据维护
@@ -859,13 +925,16 @@ rm db/fund_flow.db
 
 | 故障现象 | 排查步骤 | 解决方案 |
 |----------|----------|----------|
-| 服务无法启动 | `tail -20 /tmp/realtime-flow.log` | 检查端口占用或 Python 错误 |
+| 服务无法启动 | `tail -20 ~/Library/Logs/realtime-flow/realtime-flow.log` | 检查端口占用或 Python 错误 |
 | 端口占用 | `lsof -i :8899` | `kill -9 PID` 或改端口 |
 | 页面白屏 | 检查浏览器控制台网络请求 | 确认服务进程存活 |
 | 无数据 | `curl /api/data` | 非交易时段正常，等开盘 |
 | 主源失败 | 查看日志"降级"关键字 | 自动降级到新浪/腾讯，无需处理 |
 | WebSocket 断连 | 查看浏览器 WS 状态 | 自动重连，5 秒后恢复 |
 | 数据库过大 | `ls -lh db/fund_flow.db` | 手动清理或调小 RETENTION_DAYS |
+| Tunnel 断开 | `tail -20 ~/Library/Logs/realtime-flow/cloudflared.log` | `bash start-tunnel.sh restart` |
+| 服务崩溃 | `launchctl list \| grep realtime-flow` | launchd 自动重启（10秒间隔） |
+| 开机不自启 | 检查 plist 是否安装 | `bash start-tunnel.sh launchd-install` |
 
 ---
 
@@ -1068,7 +1137,7 @@ custom_domains = stock.yourdomain.com
 2. **限流**：Cloudflare 免费版自带 DDoS 防护和限流
 3. **关闭危险 API**：外网暴露时建议在 main.py 中注释掉 `/api/watchlist/add` 等写操作
 4. **改默认端口**：虽然 Cloudflare Tunnel 不暴露真实端口，但养成好习惯
-5. **定期查日志**：`grep "POST /api" /tmp/realtime-flow.log`
+5. **定期查日志**：`grep "POST /api" ~/Library/Logs/realtime-flow/realtime-flow.log`
 
 ### 10.5 你需要提供的信息
 
@@ -1146,7 +1215,7 @@ async def my_custom():
 
 系统自动降级到新浪/腾讯备用源，无需人工干预。查看日志：
 ```bash
-grep "降级" /tmp/realtime-flow.log
+grep "降级" ~/Library/Logs/realtime-flow/realtime-flow.log
 ```
 
 ### 12.5 信号会重复写入吗？
@@ -1163,7 +1232,16 @@ grep "降级" /tmp/realtime-flow.log
 
 ### 12.8 服务会自动重启吗？
 
-如果使用 `launchd-install` 安装了 launchd 服务（macOS），系统会在崩溃或重启后自动拉起。
+**v2.1 起支持完整的保活机制**：
+- `bash start.sh launchd-install`：主服务开机自启 + 崩溃自动重启（10秒间隔）
+- `bash start-tunnel.sh launchd-install`：主服务 + Tunnel 都开机自启 + 崩溃重启
+- launchd 配置含 `KeepAlive`（崩溃重启）+ `ThrottleInterval=10`（熔断间隔）
+- 启动时 5 次 `/health` 健康检查，确保服务真正可用
+
+查看 launchd 状态：
+```bash
+launchctl list | grep realtime-flow
+```
 
 ### 12.9 能在 Windows 上用吗？
 
@@ -1213,7 +1291,15 @@ grep "降级" /tmp/realtime-flow.log
 | DEBUG | false | 调试模式 |
 | DB_PATH | `db/fund_flow.db` | 数据库路径（可设为绝对路径） |
 | WEB_PORT | 8899 | Web 服务端口 |
+| TUNNEL_DOMAIN | example.com | Cloudflare Tunnel 域名 |
+| TUNNEL_SUBDOMAIN | stock.example.com | 外网访问子域名 |
+| TUNNEL_NAME | realtime-flow | Tunnel 名称 |
+| LOCAL_PORT | 8899 | 本地服务端口 |
+| AUTH_USER | admin | 访问认证用户名 |
+| AUTH_PASS | change_your_password_here | 访问认证密码 |
+
+> 以上变量在 `.env` 文件中配置（不提交到 git），`.env.example` 为模板。
 
 ---
 
-*文档结束 · v2.0 · 2026-06-17 · 如有问题请查看日志或检查 config.py 配置*
+*文档结束 · v2.1 · 2026-06-17 · 如有问题请查看日志或检查 config.py 配置*

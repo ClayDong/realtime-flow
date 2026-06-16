@@ -60,14 +60,32 @@ elif [ -x "$HOME/.cloudflared/bin/cloudflared" ]; then
     export PATH="$HOME/.cloudflared/bin:$PATH"
 fi
 
+# 探测 python3 路径（不硬编码）
+detect_python() {
+    if [ -x "$SCRIPT_DIR/venv/bin/python3" ]; then echo "$SCRIPT_DIR/venv/bin/python3"; return; fi
+    if [ -x "$SCRIPT_DIR/.venv/bin/python3" ]; then echo "$SCRIPT_DIR/.venv/bin/python3"; return; fi
+    if command -v python3 &> /dev/null; then command -v python3; return; fi
+    for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+        [ -x "$p" ] && echo "$p" && return
+    done
+    echo ""
+}
+PYTHON_BIN="$(detect_python)"
+
 # 文件路径（使用脚本所在目录，不硬编码用户路径）
 PROJECT_DIR="$SCRIPT_DIR"
 CLOUDFLARED_DIR="$HOME/.cloudflared"
 CLOUDFLARED_CONFIG="$CLOUDFLARED_DIR/config.yml"
-CLOUDFLARED_LOG="/tmp/cloudflared.log"
-SERVICE_LOG="/tmp/realtime-flow.log"
+# 日志写到 ~/Library/Logs（重启不丢失）
+LOG_DIR="$HOME/Library/Logs/realtime-flow"
+CLOUDFLARED_LOG="$LOG_DIR/cloudflared.log"
+SERVICE_LOG="$LOG_DIR/realtime-flow.log"
 PID_FILE="/tmp/realtime-flow.pid"
 TUNNEL_PID_FILE="/tmp/cloudflared.pid"
+PLIST_SERVICE="$HOME/Library/LaunchAgents/com.realtime-flow.plist"
+PLIST_TUNNEL="$HOME/Library/LaunchAgents/com.realtime-flow-tunnel.plist"
+
+mkdir -p "$LOG_DIR"
 
 # ─── 命令实现 ────────────────────────────────────────
 
@@ -196,17 +214,32 @@ EOF
 cmd_start() {
     echo "=== 启动 realtime-flow（带认证）==="
 
+    if [ -z "$PYTHON_BIN" ]; then
+        echo "❌ 未找到 python3，请先安装 Python 3.9+"
+        exit 1
+    fi
+
     # 1. 启动主服务（带认证环境变量）
     if [ -f "$PID_FILE" ] && kill -0 $(cat $PID_FILE) 2>/dev/null; then
         echo "⚠️  服务已在运行 (PID: $(cat $PID_FILE))"
     else
         echo "🚀 启动 FastAPI 服务..."
+        echo "   Python: $PYTHON_BIN"
         cd $PROJECT_DIR
-        AUTH_USER="$AUTH_USER" AUTH_PASS="$AUTH_PASS" python3 main.py > $SERVICE_LOG 2>&1 &
+        AUTH_USER="$AUTH_USER" AUTH_PASS="$AUTH_PASS" "$PYTHON_BIN" main.py > $SERVICE_LOG 2>&1 &
         echo $! > $PID_FILE
         sleep 3
 
-        if kill -0 $(cat $PID_FILE) 2>/dev/null; then
+        # 健康检查（最多重试 5 次）
+        HEALTHY=0
+        for i in 1 2 3 4 5; do
+            if curl -s --max-time 2 http://localhost:$LOCAL_PORT/health > /dev/null 2>&1; then
+                HEALTHY=1; break
+            fi
+            sleep 2
+        done
+
+        if [ $HEALTHY -eq 1 ]; then
             echo "✓ 服务已启动 (PID: $(cat $PID_FILE))"
             echo "  本地访问: http://localhost:$LOCAL_PORT (无需密码)"
             echo "  日志: tail -f $SERVICE_LOG"
@@ -247,6 +280,8 @@ cmd_start() {
     echo "🔐 认证密码: $AUTH_PASS"
     echo ""
     echo "本地访问无需密码: http://localhost:$LOCAL_PORT"
+    echo ""
+    echo "💡 开机自启: bash start-tunnel.sh launchd-install"
 }
 
 cmd_stop() {
@@ -310,6 +345,149 @@ cmd_logs() {
     tail -f $SERVICE_LOG $CLOUDFLARED_LOG
 }
 
+cmd_launchd_install() {
+    echo "=== 安装 LaunchAgent（开机自启 + 崩溃自动重启）==="
+    echo ""
+
+    if [ -z "$PYTHON_BIN" ]; then
+        echo "❌ 未找到 python3，请先安装 Python 3.9+"
+        exit 1
+    fi
+    echo "   Python: $PYTHON_BIN"
+
+    if [ -z "$CLOUDFLARED_BIN" ]; then
+        echo "❌ cloudflared 未安装，请先运行: bash start-tunnel.sh setup"
+        exit 1
+    fi
+    echo "   cloudflared: $CLOUDFLARED_BIN"
+
+    # 先停止当前运行的进程
+    cmd_stop > /dev/null 2>&1
+    sleep 2
+
+    mkdir -p "$HOME/Library/LaunchAgents"
+
+    # 1. FastAPI 服务 LaunchAgent
+    echo "📦 安装 FastAPI 服务 LaunchAgent..."
+    cat > "$PLIST_SERVICE" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.realtime-flow</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${PROJECT_DIR}/main.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${PROJECT_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>${SERVICE_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${SERVICE_LOG}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AUTH_USER</key>
+        <string>${AUTH_USER}</string>
+        <key>AUTH_PASS</key>
+        <string>${AUTH_PASS}</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
+PLIST
+    launchctl unload "$PLIST_SERVICE" 2>/dev/null
+    launchctl load "$PLIST_SERVICE"
+    echo "✓ FastAPI 服务 LaunchAgent 已安装"
+
+    # 2. Cloudflare Tunnel LaunchAgent
+    echo "📦 安装 Cloudflare Tunnel LaunchAgent..."
+    cat > "$PLIST_TUNNEL" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.realtime-flow-tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${CLOUDFLARED_BIN}</string>
+        <string>tunnel</string>
+        <string>--config</string>
+        <string>${CLOUDFLARED_CONFIG}</string>
+        <string>run</string>
+        <string>${TUNNEL_NAME}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${CLOUDFLARED_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>${CLOUDFLARED_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${CLOUDFLARED_LOG}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${HOME}</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
+PLIST
+    launchctl unload "$PLIST_TUNNEL" 2>/dev/null
+    launchctl load "$PLIST_TUNNEL"
+    echo "✓ Cloudflare Tunnel LaunchAgent 已安装"
+
+    echo ""
+    echo "=== 安装完成 ==="
+    echo "✅ 开机自启已启用，服务崩溃后 10 秒内自动重启"
+    echo ""
+    echo "查看状态: launchctl list | grep realtime-flow"
+    echo "卸载: bash start-tunnel.sh launchd-remove"
+    echo "日志: $SERVICE_LOG / $CLOUDFLARED_LOG"
+}
+
+cmd_launchd_remove() {
+    echo "=== 移除 LaunchAgent ==="
+    launchctl unload "$PLIST_SERVICE" 2>/dev/null
+    launchctl unload "$PLIST_TUNNEL" 2>/dev/null
+    # 尝试删除 plist 文件（可能在 Home 目录，需要手动删）
+    rm -f "$PLIST_SERVICE" 2>/dev/null
+    rm -f "$PLIST_TUNNEL" 2>/dev/null
+    echo "✓ 已卸载 LaunchAgent"
+    if [ -f "$PLIST_SERVICE" ] || [ -f "$PLIST_TUNNEL" ]; then
+        echo "⚠️  plist 文件未删除（权限限制），请手动执行："
+        echo "   rm -f ~/Library/LaunchAgents/com.realtime-flow*.plist"
+    else
+        echo "✓ plist 文件已删除（开机不再自启）"
+    fi
+}
+
 # ─── 主入口 ─────────────────────────────────────────
 case "${1:-}" in
     setup)  cmd_setup ;;
@@ -318,16 +496,20 @@ case "${1:-}" in
     status) cmd_status ;;
     logs)   cmd_logs ;;
     restart) cmd_stop; sleep 2; cmd_start ;;
+    launchd-install) cmd_launchd_install ;;
+    launchd-remove) cmd_launchd_remove ;;
     *)
-        echo "用法: bash $0 {setup|start|stop|restart|status|logs}"
+        echo "用法: bash $0 {setup|start|stop|restart|status|logs|launchd-install|launchd-remove}"
         echo ""
         echo "命令说明:"
-        echo "  setup   首次安装配置（登录Cloudflare、创建Tunnel、添加DNS）"
-        echo "  start   启动服务（带认证）+ Cloudflare Tunnel"
-        echo "  stop    停止所有服务"
-        echo "  restart 重启服务"
-        echo "  status  查看运行状态"
-        echo "  logs    实时查看日志"
+        echo "  setup            首次安装配置（登录Cloudflare、创建Tunnel、添加DNS）"
+        echo "  start            启动服务（带认证）+ Cloudflare Tunnel"
+        echo "  stop             停止所有服务"
+        echo "  restart          重启服务"
+        echo "  status           查看运行状态"
+        echo "  logs             实时查看日志"
+        echo "  launchd-install  安装开机自启 + 崩溃自动重启（推荐生产环境）"
+        echo "  launchd-remove   卸载开机自启"
         echo ""
         echo "配置:"
         echo "  域名: https://$SUBDOMAIN"

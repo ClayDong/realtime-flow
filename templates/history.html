@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>历史数据 - realtime-flow</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📜</text></svg>">
+  <style>
+    .history-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .history-controls select, .history-controls input {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      font-size: 14px;
+      min-width: 180px;
+    }
+    .history-controls button {
+      background: linear-gradient(135deg, var(--accent-blue), #2196f3);
+      color: white;
+      border: none;
+      padding: 8px 20px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: opacity 0.2s;
+    }
+    .history-controls button:hover { opacity: 0.9; }
+    .history-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .tab-bar {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-bar button {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 14px;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab-bar button.active {
+      color: var(--accent-blue);
+      border-bottom-color: var(--accent-blue);
+    }
+    .tab-bar button:hover { color: var(--text-primary); }
+    .chart-container {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 16px;
+      height: 400px;
+      position: relative;
+    }
+    .data-source-tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+    }
+    .data-source-tag.local { background: rgba(0,200,83,0.15); color: var(--accent-green); }
+    .data-source-tag.akshare { background: rgba(255,215,64,0.15); color: var(--accent-gold); }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-brand">📊 资金流监测</div>
+    <div class="navbar-links">
+      <a href="/">综合看板</a>
+      <a href="/sectors">行业资金</a>
+      <a href="/stocks">个股资金</a>
+      <a href="/history" class="active">历史数据</a>
+    </div>
+    <div class="navbar-status">
+      <span id="status-text">就绪</span>
+      <span class="status-dot online" id="status-dot"></span>
+      <button onclick="logout()" style="margin-left:12px;background:rgba(255,23,68,0.15);color:var(--accent-red);border:1px solid rgba(255,23,68,0.3);padding:3px 10px;border-radius:4px;cursor:pointer;font-size:12px;">登出</button>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <h1 class="page-title">📜 历史数据查询</h1>
+        <p class="page-subtitle">基于本地落盘数据的时间序列分析 · 支持行业/个股/大盘多维度回溯</p>
+      </div>
+      <div class="timestamp">🕐 更新: <span id="update-time">-</span></div>
+    </div>
+
+    <!-- Tab 切换 -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="sector" onclick="switchTab('sector')">🏭 行业历史</button>
+      <button class="tab-btn" data-tab="stock" onclick="switchTab('stock')">📈 个股历史</button>
+      <button class="tab-btn" data-tab="market" onclick="switchTab('market')">🌐 大盘历史</button>
+    </div>
+
+    <!-- 行业历史 -->
+    <div id="tab-sector" class="tab-content">
+      <div class="history-controls">
+        <select id="sector-select"><option value="">加载行业列表...</option></select>
+        <select id="sector-days">
+          <option value="7">近 7 天</option>
+          <option value="30" selected>近 30 天</option>
+          <option value="90">近 90 天</option>
+          <option value="180">近 180 天</option>
+        </select>
+        <select id="sector-granularity">
+          <option value="daily" selected>日级聚合</option>
+          <option value="minute">分钟级</option>
+        </select>
+        <button onclick="querySectorHistory()">查询</button>
+      </div>
+      <div class="chart-container">
+        <canvas id="sector-chart"></canvas>
+      </div>
+      <div id="sector-table-wrapper"></div>
+    </div>
+
+    <!-- 个股历史 -->
+    <div id="tab-stock" class="tab-content" style="display:none;">
+      <div class="history-controls">
+        <select id="stock-select"><option value="">加载个股列表...</option></select>
+        <select id="stock-days">
+          <option value="7">近 7 天</option>
+          <option value="30" selected>近 30 天</option>
+          <option value="90">近 90 天</option>
+          <option value="180">近 180 天</option>
+        </select>
+        <select id="stock-granularity">
+          <option value="daily" selected>日级聚合</option>
+          <option value="minute">分钟级</option>
+        </select>
+        <button onclick="queryStockHistory()">查询</button>
+      </div>
+      <div class="chart-container">
+        <canvas id="stock-chart"></canvas>
+      </div>
+      <div id="stock-table-wrapper"></div>
+    </div>
+
+    <!-- 大盘历史 -->
+    <div id="tab-market" class="tab-content" style="display:none;">
+      <div class="history-controls">
+        <select id="market-days">
+          <option value="7">近 7 天</option>
+          <option value="30" selected>近 30 天</option>
+          <option value="90">近 90 天</option>
+          <option value="180">近 180 天</option>
+        </select>
+        <button onclick="queryMarketHistory()">查询</button>
+      </div>
+      <div class="chart-container">
+        <canvas id="market-chart"></canvas>
+      </div>
+      <div id="market-table-wrapper"></div>
+    </div>
+
+    <div style="margin-top:32px;padding:16px;border-top:1px solid var(--border);text-align:center;color:var(--text-muted);font-size:12px;">
+      <p>数据来源：本地落盘数据库（SQLite）· 保留 180 天 · 交易时段每 2 分钟采集一次</p>
+      <p style="margin-top:4px;">⚠️ 投资有风险，入市需谨慎</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script>
+    let sectorChart = null, stockChart = null, marketChart = null;
+
+    // ─── 登出 ───
+    async function logout() {
+      if (!confirm('确认登出？')) return;
+      await fetch('/api/auth/logout', {method: 'POST'});
+      window.location.href = '/login';
+    }
+
+    // ─── Tab 切换 ───
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+      document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+      document.getElementById(`tab-${tab}`).style.display = 'block';
+    }
+
+    // ─── 工具函数 ───
+    function formatMoney(val) {
+      if (val === null || val === undefined || isNaN(val)) return '-';
+      const v = Number(val);
+      if (Math.abs(v) >= 10000) return (v / 10000).toFixed(2) + '亿';
+      if (Math.abs(v) >= 1) return v.toFixed(2) + '亿';
+      return (v * 10000).toFixed(0) + '万';
+    }
+    function formatPct(val) {
+      if (val === null || val === undefined || isNaN(val)) return '-';
+      const v = Number(val);
+      return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    }
+    function colorClass(val) {
+      if (val === null || val === undefined || isNaN(val)) return 'neutral';
+      return Number(val) >= 0 ? 'positive' : 'negative';
+    }
+    function updateTime() {
+      document.getElementById('update-time').textContent = new Date().toLocaleTimeString('zh-CN');
+    }
+    setInterval(updateTime, 1000);
+    updateTime();
+
+    // ─── 加载行业列表 ───
+    async function loadSectorList() {
+      try {
+        const res = await fetch('/api/history/sectors/list');
+        const json = await res.json();
+        const select = document.getElementById('sector-select');
+        if (json.data && json.data.length) {
+          select.innerHTML = json.data.map(s => `<option value="${s}">${s}</option>`).join('');
+        } else {
+          select.innerHTML = '<option value="">暂无行业数据（等待采集）</option>';
+        }
+      } catch (e) {
+        console.error('加载行业列表失败:', e);
+      }
+    }
+
+    // ─── 加载个股列表 ───
+    async function loadStockList() {
+      try {
+        const res = await fetch('/api/history/stocks/list');
+        const json = await res.json();
+        const select = document.getElementById('stock-select');
+        if (json.data && json.data.length) {
+          select.innerHTML = json.data.map(s =>
+            `<option value="${s.stock_code}">${s.stock_code} ${s.stock_name || ''}</option>`
+          ).join('');
+        } else {
+          select.innerHTML = '<option value="">暂无个股数据（等待采集）</option>';
+        }
+      } catch (e) {
+        console.error('加载个股列表失败:', e);
+      }
+    }
+
+    // ─── 查询行业历史 ───
+    async function querySectorHistory() {
+      const sectorName = document.getElementById('sector-select').value;
+      const days = document.getElementById('sector-days').value;
+      const granularity = document.getElementById('sector-granularity').value;
+      if (!sectorName) { alert('请选择行业'); return; }
+
+      const url = granularity === 'daily'
+        ? `/api/history/local/sector/daily?sector_name=${encodeURIComponent(sectorName)}&days=${days}`
+        : `/api/history/local/sector?sector_name=${encodeURIComponent(sectorName)}&days=${days}`;
+
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        renderSectorChart(json.data || [], sectorName, granularity);
+        renderSectorTable(json.data || [], granularity);
+      } catch (e) {
+        console.error('查询行业历史失败:', e);
+        alert('查询失败: ' + e.message);
+      }
+    }
+
+    function renderSectorChart(data, sectorName, granularity) {
+      const ctx = document.getElementById('sector-chart').getContext('2d');
+      if (sectorChart) sectorChart.destroy();
+
+      if (!data.length) {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.font = '14px sans-serif';
+        ctx.fillStyle = '#8899aa';
+        ctx.textAlign = 'center';
+        ctx.fillText('暂无历史数据', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+      }
+
+      const labels = data.map(d => granularity === 'daily' ? d.date : d.snapshot_time?.substring(5, 16));
+      const mainInflow = data.map(d => Number(d.last_main_inflow || d.main_net_inflow || 0));
+      const priceChange = data.map(d => Number(d.last_price_change || d.price_change || 0));
+
+      sectorChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: '主力净流入（亿）',
+              data: mainInflow.map(v => v / 10000),
+              borderColor: '#40c4ff',
+              backgroundColor: 'rgba(64,196,255,0.1)',
+              fill: true,
+              yAxisID: 'y',
+              tension: 0.3,
+            },
+            {
+              label: '涨跌幅（%）',
+              data: priceChange,
+              borderColor: '#ffd740',
+              backgroundColor: 'transparent',
+              yAxisID: 'y1',
+              tension: 0.3,
+              borderDash: [5, 5],
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: { display: true, text: `${sectorName} - 资金流历史`, color: '#e8edf2' },
+            legend: { labels: { color: '#8899aa' } }
+          },
+          scales: {
+            x: { ticks: { color: '#8899aa', maxTicksLimit: 12 }, grid: { color: '#2a3a4a' } },
+            y: { position: 'left', ticks: { color: '#40c4ff' }, grid: { color: '#2a3a4a' }, title: { display: true, text: '主力净流入（亿）', color: '#40c4ff' } },
+            y1: { position: 'right', ticks: { color: '#ffd740' }, grid: { drawOnChartArea: false }, title: { display: true, text: '涨跌幅（%）', color: '#ffd740' } }
+          }
+        }
+      });
+    }
+
+    function renderSectorTable(data, granularity) {
+      const wrapper = document.getElementById('sector-table-wrapper');
+      if (!data.length) {
+        wrapper.innerHTML = '<div class="card"><div class="empty-state"><div class="icon">📭</div><p>暂无历史数据</p></div></div>';
+        return;
+      }
+      const isDaily = granularity === 'daily';
+      wrapper.innerHTML = `
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">📋 明细数据（${data.length} 条）</div>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr>
+                <th>${isDaily ? '日期' : '时间'}</th>
+                <th>主力净流入</th>
+                <th>主力净占比</th>
+                <th>涨跌幅</th>
+                <th>超大单</th>
+                <th>大单</th>
+                <th>中单</th>
+                <th>小单</th>
+              </tr></thead>
+              <tbody>
+                ${data.slice().reverse().map(d => {
+                  const time = isDaily ? d.date : d.snapshot_time?.substring(5, 16);
+                  const main = d.last_main_inflow || d.main_net_inflow || 0;
+                  const ratio = d.last_main_ratio || d.main_net_ratio || 0;
+                  const pct = d.last_price_change || d.price_change || 0;
+                  return `<tr>
+                    <td>${time}</td>
+                    <td class="${colorClass(main)}">${formatMoney(main)}</td>
+                    <td class="${colorClass(ratio)}">${formatPct(ratio)}</td>
+                    <td class="${colorClass(pct)}">${formatPct(pct)}</td>
+                    <td class="${colorClass(d.super_large_inflow)}">${formatMoney(d.super_large_inflow)}</td>
+                    <td class="${colorClass(d.large_inflow)}">${formatMoney(d.large_inflow)}</td>
+                    <td class="${colorClass(d.medium_inflow)}">${formatMoney(d.medium_inflow)}</td>
+                    <td class="${colorClass(d.small_inflow)}">${formatMoney(d.small_inflow)}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── 查询个股历史 ───
+    async function queryStockHistory() {
+      const code = document.getElementById('stock-select').value;
+      const days = document.getElementById('stock-days').value;
+      const granularity = document.getElementById('stock-granularity').value;
+      if (!code) { alert('请选择个股'); return; }
+
+      const url = granularity === 'daily'
+        ? `/api/history/local/stock/daily?code=${code}&days=${days}`
+        : `/api/history/local/stock?code=${code}&days=${days}`;
+
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        renderStockChart(json.data || [], code, granularity);
+        renderStockTable(json.data || [], granularity);
+      } catch (e) {
+        console.error('查询个股历史失败:', e);
+        alert('查询失败: ' + e.message);
+      }
+    }
+
+    function renderStockChart(data, code, granularity) {
+      const ctx = document.getElementById('stock-chart').getContext('2d');
+      if (stockChart) stockChart.destroy();
+
+      if (!data.length) {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.font = '14px sans-serif';
+        ctx.fillStyle = '#8899aa';
+        ctx.textAlign = 'center';
+        ctx.fillText('暂无历史数据', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+      }
+
+      const labels = data.map(d => granularity === 'daily' ? d.date : d.snapshot_time?.substring(5, 16));
+      const mainInflow = data.map(d => Number(d.last_main_inflow || d.main_net_inflow || 0));
+      const price = data.map(d => Number(d.last_price || d.current_price || 0));
+
+      stockChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: '主力净流入（亿）',
+              data: mainInflow.map(v => v / 10000),
+              borderColor: '#00c853',
+              backgroundColor: 'rgba(0,200,83,0.1)',
+              fill: true,
+              yAxisID: 'y',
+              tension: 0.3,
+            },
+            {
+              label: '价格（元）',
+              data: price,
+              borderColor: '#ffd740',
+              backgroundColor: 'transparent',
+              yAxisID: 'y1',
+              tension: 0.3,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: { display: true, text: `${code} - 资金流历史`, color: '#e8edf2' },
+            legend: { labels: { color: '#8899aa' } }
+          },
+          scales: {
+            x: { ticks: { color: '#8899aa', maxTicksLimit: 12 }, grid: { color: '#2a3a4a' } },
+            y: { position: 'left', ticks: { color: '#00c853' }, grid: { color: '#2a3a4a' }, title: { display: true, text: '主力净流入（亿）', color: '#00c853' } },
+            y1: { position: 'right', ticks: { color: '#ffd740' }, grid: { drawOnChartArea: false }, title: { display: true, text: '价格（元）', color: '#ffd740' } }
+          }
+        }
+      });
+    }
+
+    function renderStockTable(data, granularity) {
+      const wrapper = document.getElementById('stock-table-wrapper');
+      if (!data.length) {
+        wrapper.innerHTML = '<div class="card"><div class="empty-state"><div class="icon">📭</div><p>暂无历史数据</p></div></div>';
+        return;
+      }
+      const isDaily = granularity === 'daily';
+      wrapper.innerHTML = `
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">📋 明细数据（${data.length} 条）</div>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr>
+                <th>${isDaily ? '日期' : '时间'}</th>
+                <th>主力净流入</th>
+                <th>主力净占比</th>
+                <th>涨跌幅</th>
+                <th>超大单</th>
+                <th>大单</th>
+                <th>中单</th>
+                <th>小单</th>
+              </tr></thead>
+              <tbody>
+                ${data.slice().reverse().map(d => {
+                  const time = isDaily ? d.date : d.snapshot_time?.substring(5, 16);
+                  const main = d.last_main_inflow || d.main_net_inflow || 0;
+                  const ratio = d.last_main_ratio || d.main_net_ratio || 0;
+                  const pct = d.last_price_change || d.price_change || 0;
+                  return `<tr>
+                    <td>${time}</td>
+                    <td class="${colorClass(main)}">${formatMoney(main)}</td>
+                    <td class="${colorClass(ratio)}">${formatPct(ratio)}</td>
+                    <td class="${colorClass(pct)}">${formatPct(pct)}</td>
+                    <td class="${colorClass(d.super_large_inflow)}">${formatMoney(d.super_large_inflow)}</td>
+                    <td class="${colorClass(d.large_inflow)}">${formatMoney(d.large_inflow)}</td>
+                    <td class="${colorClass(d.medium_inflow)}">${formatMoney(d.medium_inflow)}</td>
+                    <td class="${colorClass(d.small_inflow)}">${formatMoney(d.small_inflow)}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── 查询大盘历史 ───
+    async function queryMarketHistory() {
+      const days = document.getElementById('market-days').value;
+      try {
+        const res = await fetch(`/api/history/local/market?days=${days}`);
+        const json = await res.json();
+        renderMarketChart(json.data || []);
+        renderMarketTable(json.data || []);
+      } catch (e) {
+        console.error('查询大盘历史失败:', e);
+        alert('查询失败: ' + e.message);
+      }
+    }
+
+    function renderMarketChart(data) {
+      const ctx = document.getElementById('market-chart').getContext('2d');
+      if (marketChart) marketChart.destroy();
+
+      if (!data.length) {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.font = '14px sans-serif';
+        ctx.fillStyle = '#8899aa';
+        ctx.textAlign = 'center';
+        ctx.fillText('暂无历史数据', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+      }
+
+      const sorted = data.slice().reverse(); // 按日期升序
+      const labels = sorted.map(d => d.date);
+      const shClose = sorted.map(d => Number(d.sh_close || 0));
+      const mainInflow = sorted.map(d => Number(d.main_net_inflow || 0));
+      const northBound = sorted.map(d => Number(d.north_bound_total || 0));
+
+      marketChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: '上证指数',
+              data: shClose,
+              borderColor: '#40c4ff',
+              backgroundColor: 'rgba(64,196,255,0.1)',
+              fill: true,
+              yAxisID: 'y',
+              tension: 0.3,
+            },
+            {
+              label: '主力净流入（亿）',
+              data: mainInflow.map(v => v / 10000),
+              borderColor: '#00c853',
+              backgroundColor: 'transparent',
+              yAxisID: 'y1',
+              tension: 0.3,
+            },
+            {
+              label: '北向资金（亿）',
+              data: northBound.map(v => v / 10000),
+              borderColor: '#b388ff',
+              backgroundColor: 'transparent',
+              yAxisID: 'y1',
+              tension: 0.3,
+              borderDash: [5, 5],
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: { display: true, text: '大盘资金流历史', color: '#e8edf2' },
+            legend: { labels: { color: '#8899aa' } }
+          },
+          scales: {
+            x: { ticks: { color: '#8899aa', maxTicksLimit: 12 }, grid: { color: '#2a3a4a' } },
+            y: { position: 'left', ticks: { color: '#40c4ff' }, grid: { color: '#2a3a4a' }, title: { display: true, text: '上证指数', color: '#40c4ff' } },
+            y1: { position: 'right', ticks: { color: '#00c853' }, grid: { drawOnChartArea: false }, title: { display: true, text: '资金（亿）', color: '#00c853' } }
+          }
+        }
+      });
+    }
+
+    function renderMarketTable(data) {
+      const wrapper = document.getElementById('market-table-wrapper');
+      if (!data.length) {
+        wrapper.innerHTML = '<div class="card"><div class="empty-state"><div class="icon">📭</div><p>暂无历史数据</p></div></div>';
+        return;
+      }
+      wrapper.innerHTML = `
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">📋 大盘资金流明细（${data.length} 天）</div>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr>
+                <th>日期</th>
+                <th>上证收盘</th>
+                <th>上证涨跌幅</th>
+                <th>深证收盘</th>
+                <th>深证涨跌幅</th>
+                <th>主力净流入</th>
+                <th>超大单</th>
+                <th>大单</th>
+                <th>北向资金</th>
+              </tr></thead>
+              <tbody>
+                ${data.map(d => `
+                  <tr>
+                    <td>${d.date}</td>
+                    <td>${d.sh_close ? Number(d.sh_close).toFixed(2) : '-'}</td>
+                    <td class="${colorClass(d.sh_change)}">${formatPct(d.sh_change)}</td>
+                    <td>${d.sz_close ? Number(d.sz_close).toFixed(2) : '-'}</td>
+                    <td class="${colorClass(d.sz_change)}">${formatPct(d.sz_change)}</td>
+                    <td class="${colorClass(d.main_net_inflow)}">${formatMoney(d.main_net_inflow)}</td>
+                    <td class="${colorClass(d.super_large_inflow)}">${formatMoney(d.super_large_inflow)}</td>
+                    <td class="${colorClass(d.large_inflow)}">${formatMoney(d.large_inflow)}</td>
+                    <td class="${colorClass(d.north_bound_total)}">${formatMoney(d.north_bound_total)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── 初始化 ───
+    document.addEventListener('DOMContentLoaded', () => {
+      loadSectorList();
+      loadStockList();
+      // 自动查询一次大盘
+      queryMarketHistory();
+    });
+  </script>
+</body>
+</html>

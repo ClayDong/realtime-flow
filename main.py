@@ -232,7 +232,15 @@ async def lifespan(app: FastAPI):
 
 
 async def cleanup_loop():
-    """定期清理旧数据（运维专家）"""
+    """定期清理旧数据（运维专家）
+    健壮性：启动时立即执行一次，避免进程重启导致清理任务长期不触发
+    """
+    # 启动时先执行一次清理
+    try:
+        db.cleanup_old_data()
+    except Exception as e:
+        logger.error(f"启动清理异常: {e}")
+    # 之后每天执行一次
     while True:
         await asyncio.sleep(86400)  # 每天
         try:
@@ -242,7 +250,7 @@ async def cleanup_loop():
 
 
 # ─── FastAPI 应用 ──────────────────────────────────
-app = FastAPI(title="realtime-flow", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="realtime-flow", version="2.1.0", lifespan=lifespan)
 
 # 注册 Cookie 认证中间件（通过环境变量 AUTH_USER/AUTH_PASS 启用）
 app.add_middleware(CookieAuthMiddleware)
@@ -361,6 +369,15 @@ async def stocks_page(request: Request):
     )
 
 
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request):
+    """历史数据查询页面"""
+    return templates.TemplateResponse(
+        request, "history.html",
+        {"page_refresh": CONFIG.web.PAGE_REFRESH_INTERVAL},
+    )
+
+
 # ══════════════════════════════════════════════════════
 # REST API
 # ══════════════════════════════════════════════════════
@@ -373,18 +390,73 @@ async def get_data():
 
 @app.get("/api/history/sectors")
 async def get_sector_history(sector_name: str = "汽车服务"):
-    """获取某行业的历史资金流"""
+    """获取某行业的历史资金流（优先本地 DB，降级到 akshare 实时拉取）"""
+    # 优先查本地 DB（已落盘的时间序列）
+    local_data = db.get_sector_history(sector_name, days=30)
+    if local_data:
+        return {"source": "local_db", "sector": sector_name, "count": len(local_data), "data": local_data}
+    # 本地无数据则降级到 akshare
     from collectors.sector_collector import SectorCollector
     sc = SectorCollector()
-    return {"data": sc.fetch_sector_history(sector_name)}
+    return {"source": "akshare", "sector": sector_name, "data": sc.fetch_sector_history(sector_name)}
 
 
 @app.get("/api/history/stock")
 async def get_stock_history(code: str = "600519", market: str = "sh"):
-    """获取某只个股的历史资金流"""
+    """获取某只个股的历史资金流（优先本地 DB，降级到 akshare）"""
+    local_data = db.get_stock_history(code, days=30)
+    if local_data:
+        return {"source": "local_db", "stock": code, "count": len(local_data), "data": local_data}
     from collectors.stock_collector import StockCollector
     sc = StockCollector()
-    return {"data": sc.fetch_stock_detail(code, market)}
+    return {"source": "akshare", "stock": code, "data": sc.fetch_stock_detail(code, market)}
+
+
+@app.get("/api/history/local/sector")
+async def get_local_sector_history(sector_name: str, days: int = 30):
+    """查询本地 DB 的行业资金流时间序列（分钟级）"""
+    data = db.get_sector_history(sector_name, days)
+    return {"sector": sector_name, "days": days, "count": len(data), "data": data}
+
+
+@app.get("/api/history/local/sector/daily")
+async def get_local_sector_daily_history(sector_name: str, days: int = 30):
+    """查询本地 DB 的行业日级聚合历史"""
+    data = db.get_sector_daily_history(sector_name, days)
+    return {"sector": sector_name, "days": days, "count": len(data), "data": data}
+
+
+@app.get("/api/history/local/stock")
+async def get_local_stock_history(code: str, days: int = 30):
+    """查询本地 DB 的个股资金流时间序列（分钟级）"""
+    data = db.get_stock_history(code, days)
+    return {"stock": code, "days": days, "count": len(data), "data": data}
+
+
+@app.get("/api/history/local/stock/daily")
+async def get_local_stock_daily_history(code: str, days: int = 30):
+    """查询本地 DB 的个股日级聚合历史"""
+    data = db.get_stock_daily_history(code, days)
+    return {"stock": code, "days": days, "count": len(data), "data": data}
+
+
+@app.get("/api/history/local/market")
+async def get_local_market_history(days: int = 30):
+    """查询本地 DB 的大盘资金流历史（按日）"""
+    data = db.get_market_flow_history(days)
+    return {"days": days, "count": len(data), "data": data}
+
+
+@app.get("/api/history/sectors/list")
+async def get_sector_list():
+    """获取所有可查询的行业名列表"""
+    return {"data": db.get_sector_list()}
+
+
+@app.get("/api/history/stocks/list")
+async def get_stock_list():
+    """获取所有可查询的个股列表"""
+    return {"data": db.get_stock_list()}
 
 
 @app.get("/api/stats")
