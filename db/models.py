@@ -8,6 +8,7 @@
 import sqlite3
 import json
 import logging
+import math
 import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
@@ -223,8 +224,15 @@ class Database:
         """保存行业资金流快照"""
         with get_conn() as conn:
             for i, rec in enumerate(records):
-                sector_name = str(rec.get(f"行业名称", rec.get("板块名称", f"未知行业_{i}")))
-                raw_json = json.dumps(rec, ensure_ascii=False)
+                # 兼容不同字段名：今日/概念用"行业名称"/"板块名称"，5日用"名称"
+                sector_name = str(
+                    rec.get("行业名称")
+                    or rec.get("板块名称")
+                    or rec.get("名称")
+                    or rec.get("概念名称")
+                    or f"未知行业_{i}"
+                )
+                raw_json = json.dumps(rec, ensure_ascii=False, default=str)
                 conn.execute("""
                     INSERT INTO sector_flow_snapshot
                     (sector_name, tag, rank_idx, current_price, price_change,
@@ -237,13 +245,13 @@ class Database:
                     tag,
                     i + 1,
                     self._safe_float(rec.get("最新价", rec.get("f2", 0))),
-                    self._safe_float(rec.get("涨跌幅", rec.get("f3", 0))),
-                    self._safe_float(rec.get("主力净流入-净额", rec.get("f62", 0))),
-                    self._safe_float(rec.get("主力净流入-净占比", rec.get("f184", 0))),
-                    self._safe_float(rec.get("超大单净流入-净额", rec.get("f66", 0))),
-                    self._safe_float(rec.get("大单净流入-净额", rec.get("f69", 0))),
-                    self._safe_float(rec.get("中单净流入-净额", rec.get("f72", 0))),
-                    self._safe_float(rec.get("小单净流入-净额", rec.get("f78", 0))),
+                    self._safe_float(rec.get("涨跌幅", rec.get("5日涨跌幅", rec.get("f3", 0)))),
+                    self._safe_float(rec.get("主力净流入-净额", rec.get("5日主力净流入-净额", rec.get("f62", 0)))),
+                    self._safe_float(rec.get("主力净流入-净占比", rec.get("5日主力净流入-净占比", rec.get("f184", 0)))),
+                    self._safe_float(rec.get("超大单净流入-净额", rec.get("5日超大单净流入-净额", rec.get("f66", 0)))),
+                    self._safe_float(rec.get("大单净流入-净额", rec.get("5日大单净流入-净额", rec.get("f69", 0)))),
+                    self._safe_float(rec.get("中单净流入-净额", rec.get("5日中单净流入-净额", rec.get("f72", 0)))),
+                    self._safe_float(rec.get("小单净流入-净额", rec.get("5日小单净流入-净额", rec.get("f78", 0)))),
                     raw_json,
                 ))
 
@@ -550,7 +558,11 @@ class Database:
         if v is None:
             return default
         try:
-            return round(float(v), 4)
+            f = float(v)
+            # 过滤 NaN 和 Infinity（JSON 不支持）
+            if math.isnan(f) or math.isinf(f):
+                return default
+            return round(f, 4)
         except (ValueError, TypeError):
             return default
 

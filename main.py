@@ -9,6 +9,7 @@ import logging
 import asyncio
 import time
 import os
+import math
 import secrets
 import hashlib
 import base64
@@ -25,6 +26,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from config import CONFIG
 from engine import engine
 from db.models import db
+
+
+def _sanitize_json(obj):
+    """递归清洗数据中的 NaN/Infinity（JSON 不支持）"""
+    if isinstance(obj, dict):
+        return {k: _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    return obj
 
 # ─── 日志配置（运维专家） ────────────────────────────
 logging.basicConfig(
@@ -157,14 +171,19 @@ connected_clients: set[WebSocket] = set()
 
 async def broadcast(data: Dict[str, Any]):
     """广播到所有连接的客户端"""
-    message = json.dumps(data, ensure_ascii=False, default=str)
+    try:
+        message = json.dumps(data, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error(f"广播数据序列化失败: {e}")
+        return
     dead = set()
-    for ws in connected_clients:
+    for ws in list(connected_clients):
         try:
             await ws.send_text(message)
         except Exception:
             dead.add(ws)
-    connected_clients -= dead
+    if dead:
+        connected_clients.difference_update(dead)
 
 
 # ─── 异步轮询任务 ──────────────────────────────────
@@ -385,7 +404,7 @@ async def history_page(request: Request):
 @app.get("/api/data")
 async def get_data():
     """获取最新缓存数据"""
-    return engine.get_cache()
+    return _sanitize_json(engine.get_cache())
 
 
 @app.get("/api/history/sectors")

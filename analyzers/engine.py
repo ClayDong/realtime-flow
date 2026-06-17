@@ -293,9 +293,9 @@ class FlowAnalyzer:
         }
 
         if market_data:
-            main_in = market_data.get("main_net_inflow", 0)
-            small_in = market_data.get("small_inflow", 0)
-            super_large = market_data.get("super_large_inflow", 0)
+            main_in = market_data.get("main_net_inflow", 0) or 0
+            small_in = market_data.get("small_inflow", 0) or 0
+            super_large = market_data.get("super_large_inflow", 0) or 0
 
             # 主力 vs 散户博弈分析（股票专家：需结合位置判断，不能绝对化）
             if main_in > 0 and small_in < 0:
@@ -308,7 +308,7 @@ class FlowAnalyzer:
                 result["main_vs_retail"] = "主力散户同时卖出（恐慌或调整）"
 
         if north_data:
-            total = north_data.get("total", 0)
+            total = north_data.get("total", 0) or 0
             result["north_bound_analysis"] = {
                 "total": total,
                 "direction": "流入" if total > 0 else "流出",

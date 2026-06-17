@@ -3,6 +3,7 @@
 数据专家视角：多数据源聚合，归一化输出
 """
 import logging
+import math
 from typing import Dict, Optional, Any
 import pandas as pd
 import akshare as ak
@@ -74,6 +75,10 @@ class MarketCollector(BaseCollector):
         if v is None:
             return default
         try:
-            return float(v)
+            f = float(v)
+            # 过滤 NaN 和 Infinity（JSON 不支持）
+            if math.isnan(f) or math.isinf(f):
+                return default
+            return f
         except (ValueError, TypeError):
             return default
